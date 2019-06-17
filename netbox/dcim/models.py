@@ -2673,6 +2673,8 @@ class Cable(ChangeLoggedModel):
         Traverse both ends of a cable path and return its connected endpoints. Note that one or both endpoints may be
         None.
         """
+        from circuits.models import CircuitTermination
+
         a_path = self.termination_b.trace(follow_circuits=True)
         b_path = self.termination_a.trace(follow_circuits=True)
 
@@ -2688,5 +2690,17 @@ class Cable(ChangeLoggedModel):
 
         a_endpoint = a_path[-1][2]
         b_endpoint = b_path[-1][2]
+
+        # If there is nothing on the other end show the first circuit
+        if not a_endpoint:
+            for segment in a_path:
+                if isinstance(segment[2], (Interface, CircuitTermination)):
+                    a_endpoint = segment[2]
+                    break
+        if not b_endpoint:
+            for segment in b_path:
+                if isinstance(segment[2], (Interface, CircuitTermination)):
+                    b_endpoint = segment[2]
+                    break
 
         return a_endpoint, b_endpoint, path_status
