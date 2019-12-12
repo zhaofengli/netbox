@@ -1,17 +1,17 @@
-from collections import OrderedDict
 import inspect
 import json
 import os
 import pkgutil
 import time
 import traceback
-import yaml
+from collections import OrderedDict
 
+import yaml
 from django import forms
 from django.conf import settings
 from django.core.validators import RegexValidator
 from django.db import transaction
-from mptt.forms import TreeNodeChoiceField
+from mptt.forms import TreeNodeChoiceField, TreeNodeMultipleChoiceField
 from mptt.models import MPTTModel
 
 from ipam.formfields import IPFormField
@@ -21,13 +21,14 @@ from .constants import LOG_DEFAULT, LOG_FAILURE, LOG_INFO, LOG_SUCCESS, LOG_WARN
 from .forms import ScriptForm
 from .signals import purge_changelog
 
-
 __all__ = [
     'BaseScript',
     'BooleanVar',
+    'ChoiceVar',
     'FileVar',
     'IntegerVar',
     'IPNetworkVar',
+    'MultiObjectVar',
     'ObjectVar',
     'Script',
     'StringVar',
@@ -133,6 +134,27 @@ class BooleanVar(ScriptVariable):
         self.field_attrs['required'] = False
 
 
+class ChoiceVar(ScriptVariable):
+    """
+    Select one of several predefined static choices, passed as a list of two-tuples. Example:
+
+        color = ChoiceVar(
+            choices=(
+                ('#ff0000', 'Red'),
+                ('#00ff00', 'Green'),
+                ('#0000ff', 'Blue')
+            )
+        )
+    """
+    form_field = forms.ChoiceField
+
+    def __init__(self, choices, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Set field choices
+        self.field_attrs['choices'] = choices
+
+
 class ObjectVar(ScriptVariable):
     """
     NetBox object representation. The provided QuerySet will determine the choices available.
@@ -148,6 +170,23 @@ class ObjectVar(ScriptVariable):
         # Update form field for MPTT (nested) objects
         if issubclass(queryset.model, MPTTModel):
             self.form_field = TreeNodeChoiceField
+
+
+class MultiObjectVar(ScriptVariable):
+    """
+    Like ObjectVar, but can represent one or more objects.
+    """
+    form_field = forms.ModelMultipleChoiceField
+
+    def __init__(self, queryset, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Queryset for field choices
+        self.field_attrs['queryset'] = queryset
+
+        # Update form field for MPTT (nested) objects
+        if issubclass(queryset.model, MPTTModel):
+            self.form_field = TreeNodeMultipleChoiceField
 
 
 class FileVar(ScriptVariable):
@@ -226,7 +265,7 @@ class BaseScript:
         Return a Django form suitable for populating the context data required to run this Script.
         """
         vars = self._get_vars()
-        form = ScriptForm(vars, data, files)
+        form = ScriptForm(vars, data, files, commit_default=getattr(self.Meta, 'commit_default', True))
 
         return form
 

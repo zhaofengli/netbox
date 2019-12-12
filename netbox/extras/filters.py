@@ -4,7 +4,7 @@ from django.db.models import Q
 
 from dcim.models import DeviceRole, Platform, Region, Site
 from tenancy.models import Tenant, TenantGroup
-from .constants import CF_FILTER_DISABLED, CF_FILTER_EXACT, CF_TYPE_BOOLEAN, CF_TYPE_SELECT
+from .constants import *
 from .models import ConfigContext, CustomField, Graph, ExportTemplate, ObjectChange, Tag, TopologyMap
 
 
@@ -230,7 +230,9 @@ class ObjectChangeFilter(django_filters.FilterSet):
 
     class Meta:
         model = ObjectChange
-        fields = ['user', 'user_name', 'request_id', 'action', 'changed_object_type', 'object_repr']
+        fields = [
+            'user', 'user_name', 'request_id', 'action', 'changed_object_type', 'changed_object_id', 'object_repr',
+        ]
 
     def search(self, queryset, name, value):
         if not value.strip():
@@ -239,3 +241,24 @@ class ObjectChangeFilter(django_filters.FilterSet):
             Q(user_name__icontains=value) |
             Q(object_repr__icontains=value)
         )
+
+
+class CreatedUpdatedFilterSet(django_filters.FilterSet):
+    created = django_filters.DateFilter()
+    created__gte = django_filters.DateFilter(
+        field_name='created',
+        lookup_expr='gte'
+    )
+    created__lte = django_filters.DateFilter(
+        field_name='created',
+        lookup_expr='lte'
+    )
+    last_updated = django_filters.DateTimeFilter()
+    last_updated__gte = django_filters.DateTimeFilter(
+        field_name='last_updated',
+        lookup_expr='gte'
+    )
+    last_updated__lte = django_filters.DateTimeFilter(
+        field_name='last_updated',
+        lookup_expr='lte'
+    )

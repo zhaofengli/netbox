@@ -9,7 +9,7 @@ from django.contrib.postgres.fields import ArrayField, JSONField
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-from django.db.models import Case, Count, Q, Sum, When, F, Subquery, OuterRef
+from django.db.models import Count, Q, Sum
 from django.urls import reverse
 from mptt.models import MPTTModel, TreeForeignKey
 from taggit.managers import TaggableManager
@@ -97,6 +97,8 @@ class CableTermination(models.Model):
         content_type_field='termination_b_type',
         object_id_field='termination_b_id'
     )
+
+    is_path_endpoint = True
 
     class Meta:
         abstract = True
@@ -732,10 +734,21 @@ class Rack(ChangeLoggedModel, CustomFieldModel):
 
     def get_utilization(self):
         """
-        Determine the utilization rate of the rack and return it as a percentage.
+        Determine the utilization rate of the rack and return it as a percentage. Occupied and reserved units both count
+        as utilized.
         """
-        u_available = len(self.get_available_units())
-        return int(float(self.u_height - u_available) / self.u_height * 100)
+        # Determine unoccupied units
+        available_units = self.get_available_units()
+
+        # Remove reserved units
+        for u in self.get_reserved_units():
+            if u in available_units:
+                available_units.remove(u)
+
+        occupied_unit_count = self.u_height - len(available_units)
+        percentage = int(float(occupied_unit_count) / self.u_height * 100)
+
+        return percentage
 
     def get_power_utilization(self):
         """
@@ -1598,6 +1611,8 @@ class Device(ChangeLoggedModel, ConfigContextModel, CustomFieldModel):
 
     def clean(self):
 
+        super().clean()
+
         # Validate site/rack combination
         if self.rack and self.site != self.rack.site:
             raise ValidationError({
@@ -2431,6 +2446,8 @@ class FrontPort(CableTermination, ComponentModel):
         validators=[MinValueValidator(1), MaxValueValidator(64)]
     )
 
+    is_path_endpoint = False
+
     objects = NaturalOrderingManager()
     tags = TaggableManager(through=TaggedItem)
 
@@ -2492,6 +2509,8 @@ class RearPort(CableTermination, ComponentModel):
         default=1,
         validators=[MinValueValidator(1), MaxValueValidator(64)]
     )
+
+    is_path_endpoint = False
 
     objects = NaturalOrderingManager()
     tags = TaggableManager(through=TaggedItem)
@@ -2574,6 +2593,16 @@ class DeviceBay(ComponentModel):
         # Cannot install a device into itself, obviously
         if self.device == self.installed_device:
             raise ValidationError("Cannot install a device into itself.")
+
+        # Check that the installed device is not already installed elsewhere
+        if self.installed_device:
+            current_bay = DeviceBay.objects.filter(installed_device=self.installed_device).first()
+            if current_bay:
+                raise ValidationError({
+                    'installed_device': "Cannot install the specified device; device is already installed in {}".format(
+                        current_bay
+                    )
+                })
 
 
 #
@@ -2770,6 +2799,22 @@ class Cable(ChangeLoggedModel):
         blank=True,
         null=True
     )
+    # Cache the associated device (where applicable) for the A and B terminations. This enables filtering of Cables by
+    # their associated Devices.
+    _termination_a_device = models.ForeignKey(
+        to=Device,
+        on_delete=models.CASCADE,
+        related_name='+',
+        blank=True,
+        null=True
+    )
+    _termination_b_device = models.ForeignKey(
+        to=Device,
+        on_delete=models.CASCADE,
+        related_name='+',
+        blank=True,
+        null=True
+    )
 
     csv_headers = [
         'termination_a_type', 'termination_a_id', 'termination_b_type', 'termination_b_id', 'type', 'status', 'label',
@@ -2799,6 +2844,8 @@ class Cable(ChangeLoggedModel):
     def clean(self):
 
         # Validate that termination A exists
+        if not hasattr(self, 'termination_a_type'):
+            raise ValidationError('Termination A type has not been specified')
         try:
             self.termination_a_type.model_class().objects.get(pk=self.termination_a_id)
         except ObjectDoesNotExist:
@@ -2807,6 +2854,8 @@ class Cable(ChangeLoggedModel):
             })
 
         # Validate that termination B exists
+        if not hasattr(self, 'termination_b_type'):
+            raise ValidationError('Termination B type has not been specified')
         try:
             self.termination_b_type.model_class().objects.get(pk=self.termination_b_id)
         except ObjectDoesNotExist:
@@ -2816,6 +2865,20 @@ class Cable(ChangeLoggedModel):
 
         type_a = self.termination_a_type.model
         type_b = self.termination_b_type.model
+
+        # Validate interface types
+        if type_a == 'interface' and self.termination_a.type in NONCONNECTABLE_IFACE_TYPES:
+            raise ValidationError({
+                'termination_a_id': 'Cables cannot be terminated to {} interfaces'.format(
+                    self.termination_a.get_type_display()
+                )
+            })
+        if type_b == 'interface' and self.termination_b.type in NONCONNECTABLE_IFACE_TYPES:
+            raise ValidationError({
+                'termination_b_id': 'Cables cannot be terminated to {} interfaces'.format(
+                    self.termination_b.get_type_display()
+                )
+            })
 
         # Check that termination types are compatible
         if type_b not in COMPATIBLE_TERMINATION_TYPES.get(type_a):
@@ -2858,20 +2921,6 @@ class Cable(ChangeLoggedModel):
                 self.termination_b, self.termination_b.cable_id
             ))
 
-        # Virtual interfaces cannot be connected
-        endpoint_a, endpoint_b, _ = self.get_path_endpoints()
-        if (
-            (
-                isinstance(endpoint_a, Interface) and
-                endpoint_a.type == IFACE_TYPE_VIRTUAL
-            ) or
-            (
-                isinstance(endpoint_b, Interface) and
-                endpoint_b.type == IFACE_TYPE_VIRTUAL
-            )
-        ):
-            raise ValidationError("Cannot connect to a virtual interface")
-
         # Validate length and length_unit
         if self.length is not None and self.length_unit is None:
             raise ValidationError("Must specify a unit when setting a cable length")
@@ -2883,6 +2932,12 @@ class Cable(ChangeLoggedModel):
         # Store the given length (if any) in meters for use in database ordering
         if self.length and self.length_unit:
             self._abs_length = to_meters(self.length, self.length_unit)
+
+        # Store the parent Device for the A and B terminations (if applicable) to enable filtering
+        if hasattr(self.termination_a, 'device'):
+            self._termination_a_device = self.termination_a.device
+        if hasattr(self.termination_b, 'device'):
+            self._termination_b_device = self.termination_b.device
 
         super().save(*args, **kwargs)
 
@@ -3089,7 +3144,9 @@ class PowerFeed(ChangeLoggedModel, CableTermination, CustomFieldModel):
 
     def to_csv(self):
         return (
+            self.power_panel.site.name,
             self.power_panel.name,
+            self.rack.group.name if self.rack and self.rack.group else None,
             self.rack.name if self.rack else None,
             self.name,
             self.get_status_display(),
