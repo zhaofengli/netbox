@@ -46,7 +46,7 @@ except ModuleNotFoundError as e:
     raise
 
 # Enforce required configuration parameters
-for parameter in ['ALLOWED_HOSTS', 'DATABASE', 'SECRET_KEY', 'REDIS']:
+for parameter in ['ALLOWED_HOSTS', 'DATABASE', 'SECRET_KEY']:
     if not hasattr(configuration, parameter):
         raise ImproperlyConfigured(
             "Required parameter {} is missing from configuration.py.".format(parameter)
@@ -55,7 +55,6 @@ for parameter in ['ALLOWED_HOSTS', 'DATABASE', 'SECRET_KEY', 'REDIS']:
 # Set required parameters
 ALLOWED_HOSTS = getattr(configuration, 'ALLOWED_HOSTS')
 DATABASE = getattr(configuration, 'DATABASE')
-REDIS = getattr(configuration, 'REDIS')
 SECRET_KEY = getattr(configuration, 'SECRET_KEY')
 
 # Set optional parameters
@@ -212,45 +211,12 @@ if STORAGE_CONFIG and STORAGE_BACKEND is None:
 #
 
 # Background task queuing
-if 'tasks' not in REDIS:
-    raise ImproperlyConfigured(
-        "REDIS section in configuration.py is missing the 'tasks' subsection."
-    )
-TASKS_REDIS = REDIS['tasks']
-TASKS_REDIS_HOST = TASKS_REDIS.get('HOST', 'localhost')
-TASKS_REDIS_PORT = TASKS_REDIS.get('PORT', 6379)
-TASKS_REDIS_SENTINELS = TASKS_REDIS.get('SENTINELS', [])
-TASKS_REDIS_USING_SENTINEL = all([
-    isinstance(TASKS_REDIS_SENTINELS, (list, tuple)),
-    len(TASKS_REDIS_SENTINELS) > 0
-])
-TASKS_REDIS_SENTINEL_SERVICE = TASKS_REDIS.get('SENTINEL_SERVICE', 'default')
-TASKS_REDIS_SENTINEL_TIMEOUT = TASKS_REDIS.get('SENTINEL_TIMEOUT', 10)
-TASKS_REDIS_PASSWORD = TASKS_REDIS.get('PASSWORD', '')
-TASKS_REDIS_DATABASE = TASKS_REDIS.get('DATABASE', 0)
-TASKS_REDIS_SSL = TASKS_REDIS.get('SSL', False)
-# TODO: Remove in v2.10 (see #5171)
-if 'DEFAULT_TIMEOUT' in TASKS_REDIS:
-    warnings.warn('DEFAULT_TIMEOUT is no longer supported under REDIS configuration. Set RQ_DEFAULT_TIMEOUT instead.')
+#
+# Z: Configured from env URL
 
 # Caching
-if 'caching' not in REDIS:
-    raise ImproperlyConfigured(
-        "REDIS section in configuration.py is missing caching subsection."
-    )
-CACHING_REDIS = REDIS['caching']
-CACHING_REDIS_HOST = CACHING_REDIS.get('HOST', 'localhost')
-CACHING_REDIS_PORT = CACHING_REDIS.get('PORT', 6379)
-CACHING_REDIS_SENTINELS = CACHING_REDIS.get('SENTINELS', [])
-CACHING_REDIS_USING_SENTINEL = all([
-    isinstance(CACHING_REDIS_SENTINELS, (list, tuple)),
-    len(CACHING_REDIS_SENTINELS) > 0
-])
-CACHING_REDIS_SENTINEL_SERVICE = CACHING_REDIS.get('SENTINEL_SERVICE', 'default')
-CACHING_REDIS_PASSWORD = CACHING_REDIS.get('PASSWORD', '')
-CACHING_REDIS_DATABASE = CACHING_REDIS.get('DATABASE', 0)
-CACHING_REDIS_SSL = CACHING_REDIS.get('SSL', False)
-
+#
+# Z: Configured from env URL
 
 #
 # Sessions
@@ -407,28 +373,8 @@ EXEMPT_EXCLUDE_MODELS = (
 #
 # Caching
 #
-if CACHING_REDIS_USING_SENTINEL:
-    CACHEOPS_SENTINEL = {
-        'locations': CACHING_REDIS_SENTINELS,
-        'service_name': CACHING_REDIS_SENTINEL_SERVICE,
-        'db': CACHING_REDIS_DATABASE,
-    }
-else:
-    if CACHING_REDIS_SSL:
-        REDIS_CACHE_CON_STRING = 'rediss://'
-    else:
-        REDIS_CACHE_CON_STRING = 'redis://'
-
-    if CACHING_REDIS_PASSWORD:
-        REDIS_CACHE_CON_STRING = '{}:{}@'.format(REDIS_CACHE_CON_STRING, CACHING_REDIS_PASSWORD)
-
-    REDIS_CACHE_CON_STRING = '{}{}:{}/{}'.format(
-        REDIS_CACHE_CON_STRING,
-        CACHING_REDIS_HOST,
-        CACHING_REDIS_PORT,
-        CACHING_REDIS_DATABASE
-    )
-    CACHEOPS_REDIS = REDIS_CACHE_CON_STRING
+# Z: Configured from env URL
+CACHEOPS_REDIS = os.environ['REDIS_URL']
 
 if not CACHE_TIMEOUT:
     CACHEOPS_ENABLED = False
@@ -548,29 +494,13 @@ SWAGGER_SETTINGS = {
 # Django RQ (Webhooks backend)
 #
 
-if TASKS_REDIS_USING_SENTINEL:
-    RQ_PARAMS = {
-        'SENTINELS': TASKS_REDIS_SENTINELS,
-        'MASTER_NAME': TASKS_REDIS_SENTINEL_SERVICE,
-        'DB': TASKS_REDIS_DATABASE,
-        'PASSWORD': TASKS_REDIS_PASSWORD,
-        'SOCKET_TIMEOUT': None,
-        'CONNECTION_KWARGS': {
-            'socket_connect_timeout': TASKS_REDIS_SENTINEL_TIMEOUT
-        },
-    }
-else:
-    RQ_PARAMS = {
-        'HOST': TASKS_REDIS_HOST,
-        'PORT': TASKS_REDIS_PORT,
-        'DB': TASKS_REDIS_DATABASE,
-        'PASSWORD': TASKS_REDIS_PASSWORD,
-        'SSL': TASKS_REDIS_SSL,
-        'DEFAULT_TIMEOUT': RQ_DEFAULT_TIMEOUT,
-    }
+RQ_PARAMS = {
+    'URL': os.environ['REDIS_URL'],
+    'DEFAULT_TIMEOUT': RQ_DEFAULT_TIMEOUT,
+}
 
 RQ_QUEUES = {
-    'default': RQ_PARAMS,  # Webhooks
+    'default': RQ_PARAMS,
     'check_releases': RQ_PARAMS,
 }
 
